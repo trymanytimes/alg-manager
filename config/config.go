@@ -5,7 +5,8 @@ import (
 )
 
 type ControllerConfig struct {
-	Path          string            `yaml:"-"`
+	Path        string `yaml:"-"`
+	ETCDAddress string `yaml:"etcdAddress"`
 }
 
 var gConf *ControllerConfig
