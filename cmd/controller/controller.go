@@ -2,16 +2,15 @@ package main
 
 import (
 	"flag"
-	"fmt"
+	"sync"
 
 	"github.com/zdnscloud/cement/log"
 	"google.golang.org/grpc"
 
 	"github.com/trymanytimes/alg-manager/config"
 	"github.com/trymanytimes/alg-manager/pkg/etcdwatch"
-	"github.com/trymanytimes/alg-manager/pkg/firewalld"
+	"github.com/trymanytimes/alg-manager/pkg/nodes"
 	"github.com/trymanytimes/alg-manager/pkg/proto/etcdserverpb"
-	rpcpb "github.com/trymanytimes/alg-manager/pkg/proto/etcdserverpb"
 	"github.com/trymanytimes/alg-manager/pkg/updatedip"
 )
 
@@ -22,7 +21,8 @@ var (
 func main() {
 	flag.StringVar(&configFile, "c", "../etc/controller.conf", "configure file path")
 	flag.Parse()
-
+	var wg sync.WaitGroup
+	wg.Add(1)
 	log.InitLogger(log.Debug)
 	conf, err := config.LoadConfig(configFile)
 	if err != nil {
@@ -36,30 +36,33 @@ func main() {
 	defer conn.Close()
 
 	kvClient := etcdserverpb.NewKVClient(conn)
-
-	watchClient, err := etcdwatch.NewETCDWatchClient(conn, conf)
+	updatedIPHandler, err := updatedip.NewUpdatedIPHandler(kvClient, conf)
+	if err != nil {
+		log.Errorf(":%s", err.Error())
+	}
+	nodesHandler := nodes.NewNodesHandler(kvClient)
+	watchUpdatedIPPortClient, err := etcdwatch.NewETCDWatchClient(conn, conf, updatedIPHandler)
 	if err != nil {
 		log.Errorf("NewETCDWatchClient:%s", err.Error())
 		return
 	}
-	if err := watchClient.Watch("/config", "", updatedip.NewUpdatedIPHandler(kvClient)); err != nil {
+	watchNodesClient, err := etcdwatch.NewETCDWatchClient(conn, conf, nodesHandler)
+	if err != nil {
+		log.Errorf("NewETCDWatchClient:%s", err.Error())
+		return
+	}
+	if err != nil {
+		log.Errorf("NewETCDWatchClient:%s", err.Error())
+		return
+	}
+	// watch /project_nm/version1_0_0/cluster/cluster_balance_info/socs.conf for the vip changed.
+	if err := watchUpdatedIPPortClient.Watch("/project_nm/version1_0_0/ate/website/domain_id/", "/project_nm/version1_0_0/ate/website/domain_id0"); err != nil {
+		log.Errorf("Watch /project_nm/version1_0_0/cluster/cluster_balance_info/socs.conf error:%s", err.Error())
+		return
+	}
+	if err := watchNodesClient.Watch("/project_nm/version1_0_0/nodes/", "/project_nm/version1_0_0/nodes0"); err != nil {
 		log.Errorf("Watch /config error:%s", err.Error())
 		return
 	}
-	if err := watchClient.Watch("/config/firewalld", "", firewalld.NewFirewalldHandler(kvClient)); err != nil {
-		log.Errorf("Watch /config/firewalld error:%s", err.Error())
-		return
-	}
-	var rsp rpcpb.WatchResponse
-	for {
-		err = watchClient.Watch_watchclient.RecvMsg(&rsp)
-		if err != nil {
-			log.Fatalf("RecvMsg error,%s", err.Error())
-		}
-		for _, e := range rsp.Events {
-			updatedip.NewUpdatedIPHandler(kvClient).DealEvent(e)
-			firewalld.NewFirewalldHandler(kvClient).DealEvent(e)
-		}
-		fmt.Println(rsp.Events)
-	}
+	wg.Wait()
 }

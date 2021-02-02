@@ -7,6 +7,7 @@ import (
 type ControllerConfig struct {
 	Path        string `yaml:"-"`
 	ETCDAddress string `yaml:"etcdAddress"`
+	Interface   string `yaml:"interface"`
 }
 
 var gConf *ControllerConfig

@@ -17,10 +17,15 @@ type ETCDWatchClient struct {
 	WatchRequest      rpcpb.WatchRequest
 	Watch_watchclient rpcpb.Watch_WatchClient
 	WatchClient       rpcpb.WatchClient
+	Handler           ETCDWatchHandler
 }
 
-func NewETCDWatchClient(conn *grpc.ClientConn, conf *config.ControllerConfig) (*ETCDWatchClient, error) {
-	instance := &ETCDWatchClient{connect: conn, WatchClient: rpcpb.NewWatchClient(conn)}
+type ETCDWatchHandler interface {
+	DealEvent(event *mvccpb.Event)
+}
+
+func NewETCDWatchClient(conn *grpc.ClientConn, conf *config.ControllerConfig, handler ETCDWatchHandler) (*ETCDWatchClient, error) {
+	instance := &ETCDWatchClient{connect: conn, WatchClient: rpcpb.NewWatchClient(conn), Handler: handler}
 	var err error
 	instance.Watch_watchclient, err = instance.WatchClient.Watch(context.TODO(), grpc.EmptyCallOption{})
 	if err != nil {
@@ -29,11 +34,7 @@ func NewETCDWatchClient(conn *grpc.ClientConn, conf *config.ControllerConfig) (*
 	return instance, nil
 }
 
-type WatchHandler interface {
-	DealEvent(event *mvccpb.Event)
-}
-
-func (c *ETCDWatchClient) Watch(key, end string, watchHandler WatchHandler) error {
+func (c *ETCDWatchClient) Watch(key, end string) error {
 	c.WatchRequest = rpcpb.WatchRequest{
 		RequestUnion: &rpcpb.WatchRequest_CreateRequest{
 			CreateRequest: &rpcpb.WatchCreateRequest{
@@ -45,5 +46,18 @@ func (c *ETCDWatchClient) Watch(key, end string, watchHandler WatchHandler) erro
 	if err := c.Watch_watchclient.Send(&c.WatchRequest); err != nil {
 		log.Fatalf("Send error,%s", err.Error())
 	}
+	go func() {
+		var rsp rpcpb.WatchResponse
+		var err error
+		for {
+			err = c.Watch_watchclient.RecvMsg(&rsp)
+			if err != nil {
+				log.Fatalf("RecvMsg error,%s", err.Error())
+			}
+			for _, e := range rsp.Events {
+				c.Handler.DealEvent(e)
+			}
+		}
+	}()
 	return nil
 }
